@@ -1,6 +1,6 @@
 # Sprintly
 
-Jira-подобный трекер задач: интерактивная канбан-доска на React и API на Go 1.23 без внешних зависимостей.
+Jira-подобный трекер задач: интерактивная канбан-доска на React, API на Go 1.23 и PostgreSQL.
 
 ## Возможности
 
@@ -8,7 +8,7 @@ Jira-подобный трекер задач: интерактивная кан
 - создание задач через диалог;
 - перенос карточек между статусами drag-and-drop;
 - адаптивная доска для телефона и десктопа;
-- Go REST API с атомарным сохранением в JSON;
+- Go REST API с хранением задач в PostgreSQL;
 - тесты создания и смены статуса задачи.
 
 ## Запуск через Docker Compose
@@ -18,7 +18,7 @@ pnpm build
 docker compose up --build
 ```
 
-После запуска откройте `http://localhost:3000`. Данные сохраняются в Docker volume `sprintly-data` и не пропадают при перезапуске контейнеров.
+После запуска откройте `http://localhost:3000`. Данные сохраняются в Docker volume `postgres-data` и не пропадают при перезапуске контейнеров.
 
 Остановка:
 
@@ -35,10 +35,11 @@ pnpm install
 pnpm dev
 ```
 
-Go API (из второго терминала):
+Go API (из второго терминала, при доступном PostgreSQL):
 
 ```powershell
 cd backend
+$env:DATABASE_URL = "postgres://sprintly:sprintly@localhost:5432/sprintly?sslmode=disable"
 go run .
 ```
 

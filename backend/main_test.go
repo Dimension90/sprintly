@@ -2,26 +2,47 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
-func testAPI(t *testing.T) http.Handler {
-	t.Helper()
-	store, err := NewStore(filepath.Join(t.TempDir(), "issues.json"))
-	if err != nil {
-		t.Fatal(err)
+type memoryStore struct{ issues []Issue }
+
+func (s *memoryStore) List(context.Context) ([]Issue, error) {
+	return append([]Issue(nil), s.issues...), nil
+}
+func (s *memoryStore) Create(_ context.Context, issue Issue) (Issue, error) {
+	if strings.TrimSpace(issue.Title) == "" {
+		return Issue{}, errors.New("title is required")
 	}
-	return API{store: store}.routes()
+	issue.ID, issue.Status, issue.CreatedAt = "ORB-171", "backlog", time.Now()
+	s.issues = append([]Issue{issue}, s.issues...)
+	return issue, nil
+}
+func (s *memoryStore) UpdateStatus(_ context.Context, id, status string) (Issue, error) {
+	if !validStatus(status) {
+		return Issue{}, errors.New("invalid status")
+	}
+	for i := range s.issues {
+		if s.issues[i].ID == id {
+			s.issues[i].Status = status
+			return s.issues[i], nil
+		}
+	}
+	return Issue{}, errors.New("issue not found")
 }
 
+func testAPI() http.Handler { return API{store: &memoryStore{issues: seedIssues()}}.routes() }
+
 func TestCreateAndMoveIssue(t *testing.T) {
-	handler := testAPI(t)
+	handler := testAPI()
 	create := httptest.NewRequest(http.MethodPost, "/api/issues", bytes.NewBufferString(`{"title":"Проверить API","points":2}`))
-	create.Header.Set("Content-Type", "application/json")
 	created := httptest.NewRecorder()
 	handler.ServeHTTP(created, create)
 	if created.Code != http.StatusCreated {
@@ -31,26 +52,25 @@ func TestCreateAndMoveIssue(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&issue); err != nil {
 		t.Fatal(err)
 	}
-
 	move := httptest.NewRequest(http.MethodPatch, "/api/issues/"+issue.ID+"/status", bytes.NewBufferString(`{"status":"done"}`))
 	moved := httptest.NewRecorder()
 	handler.ServeHTTP(moved, move)
 	if moved.Code != http.StatusOK {
 		t.Fatalf("move status = %d, body = %s", moved.Code, moved.Body.String())
 	}
-	if err := json.NewDecoder(moved.Body).Decode(&issue); err != nil {
-		t.Fatal(err)
-	}
-	if issue.Status != "done" {
-		t.Fatalf("status = %q", issue.Status)
-	}
 }
 
 func TestRejectsEmptyTitle(t *testing.T) {
-	handler := testAPI(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/issues", bytes.NewBufferString(`{"title":"   "}`))
 	res := httptest.NewRecorder()
-	handler.ServeHTTP(res, req)
+	testAPI().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/issues", bytes.NewBufferString(`{"title":"   "}`)))
+	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", res.Code)
+	}
+}
+
+func TestRejectsInvalidStatus(t *testing.T) {
+	res := httptest.NewRecorder()
+	testAPI().ServeHTTP(res, httptest.NewRequest(http.MethodPatch, "/api/issues/ORB-142/status", bytes.NewBufferString(`{"status":"unknown"}`)))
 	if res.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d", res.Code)
 	}

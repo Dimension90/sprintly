@@ -1,12 +1,28 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sprintly
+      POSTGRES_USER: sprintly
+      POSTGRES_PASSWORD: sprintly
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprintly -d sprintly"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
   api:
     build:
       context: ./backend
     environment:
       SPRINTLY_ADDR: ":8080"
-      SPRINTLY_DATA: /app/data/issues.json
-    volumes:
-      - sprintly-data:/app/data
+      DATABASE_URL: postgres://sprintly:sprintly@postgres:5432/sprintly?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/health"]
       interval: 5s
@@ -25,4 +41,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  sprintly-data:
+  postgres-data:
