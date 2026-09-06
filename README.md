@@ -11,7 +11,22 @@ Jira-подобный трекер задач: интерактивная кан
 - Go REST API с атомарным сохранением в JSON;
 - тесты создания и смены статуса задачи.
 
-## Запуск
+## Запуск через Docker Compose
+
+```powershell
+pnpm build
+docker compose up --build
+```
+
+После запуска откройте `http://localhost:3000`. Данные сохраняются в Docker volume `sprintly-data` и не пропадают при перезапуске контейнеров.
+
+Остановка:
+
+```powershell
+docker compose down
+```
+
+## Запуск без Docker
 
 Фронтенд:
 

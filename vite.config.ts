@@ -47,8 +47,15 @@ export default defineConfig(async () => {
   return {
     css: { postcss: { plugins: [tailwindcss()] } },
     server: isCodexSeatbeltSandbox
-      ? { host: '127.0.0.1', watch: { useFsEvents: false, usePolling: true } }
-      : { host: '127.0.0.1' },
+      ? {
+          host: process.env.SPRINTLY_DEV_HOST ?? '127.0.0.1',
+          proxy: { '/api': process.env.SPRINTLY_API_PROXY ?? 'http://127.0.0.1:8080' },
+          watch: { useFsEvents: false, usePolling: true },
+        }
+      : {
+          host: process.env.SPRINTLY_DEV_HOST ?? '127.0.0.1',
+          proxy: { '/api': process.env.SPRINTLY_API_PROXY ?? 'http://127.0.0.1:8080' },
+        },
     plugins: [
       vinext(),
       sites(),

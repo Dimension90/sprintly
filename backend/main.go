@@ -196,9 +196,15 @@ func seedIssues() []Issue {
 	now := time.Now().UTC().Format(time.RFC3339)
 	return []Issue{
 		{ID: "ORB-142", Title: "Обновить онбординг для новых команд", Status: "backlog", Priority: "Высокий", Assignee: "АК", Points: 5, Comments: 8, Attachments: 2, Label: "Продукт", CreatedAt: now},
+		{ID: "ORB-156", Title: "Добавить быстрые фильтры на доску", Status: "backlog", Priority: "Средний", Assignee: "МЛ", Points: 3, Comments: 3, Label: "UX", CreatedAt: now},
+		{ID: "ORB-161", Title: "Тексты пустых состояний", Status: "backlog", Priority: "Низкий", Assignee: "ЕС", Points: 2, Comments: 1, Attachments: 1, Label: "Контент", CreatedAt: now},
 		{ID: "ORB-133", Title: "Новый экран аналитики спринта", Status: "progress", Priority: "Высокий", Assignee: "ДР", Points: 8, Comments: 12, Attachments: 4, Label: "Дизайн", CreatedAt: now},
+		{ID: "ORB-149", Title: "Оптимизировать загрузку карточек", Status: "progress", Priority: "Средний", Assignee: "АК", Points: 5, Comments: 5, Attachments: 1, Label: "Backend", CreatedAt: now},
+		{ID: "ORB-152", Title: "Поддержка drag-and-drop на мобильных", Status: "progress", Priority: "Средний", Assignee: "МЛ", Points: 3, Comments: 2, Label: "Frontend", CreatedAt: now},
 		{ID: "ORB-137", Title: "Сценарий приглашения участников", Status: "review", Priority: "Высокий", Assignee: "ЕС", Points: 5, Comments: 7, Attachments: 3, Label: "Продукт", CreatedAt: now},
+		{ID: "ORB-145", Title: "Экспорт отчёта в CSV", Status: "review", Priority: "Низкий", Assignee: "ДР", Points: 3, Comments: 4, Attachments: 1, Label: "Backend", CreatedAt: now},
 		{ID: "ORB-121", Title: "Единая система уведомлений", Status: "done", Priority: "Средний", Assignee: "АК", Points: 8, Comments: 10, Attachments: 2, Label: "Platform", CreatedAt: now},
+		{ID: "ORB-129", Title: "Профиль и часовой пояс", Status: "done", Priority: "Низкий", Assignee: "МЛ", Points: 3, Comments: 2, Label: "Frontend", CreatedAt: now},
 	}
 }
 

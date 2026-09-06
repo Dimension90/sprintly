@@ -63,12 +63,28 @@ export default function Home() {
   const [newTitle, setNewTitle] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/issues', { signal: controller.signal })
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then((data: Issue[]) => { if (Array.isArray(data) && data.length) setIssues(data); })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
   const visibleIssues = useMemo(() => { const value = query.trim().toLowerCase(); return value ? issues.filter((issue) => `${issue.id} ${issue.title} ${issue.label}`.toLowerCase().includes(value)) : issues }, [issues, query]);
-  const moveIssue = (id: string, status: Status) => setIssues((current) => current.map((issue) => issue.id === id ? { ...issue, status } : issue));
+  const moveIssue = (id: string, status: Status) => {
+    setIssues((current) => current.map((issue) => issue.id === id ? { ...issue, status } : issue));
+    void fetch(`/api/issues/${encodeURIComponent(id)}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }).catch(() => undefined);
+  };
   const onDrop = (event: DragEvent, status: Status) => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (id) moveIssue(id, status); };
-  const createIssue = () => {
+  const createIssue = async () => {
     const title = newTitle.trim(); if (!title) return;
-    setIssues((current) => [{ id: `ORB-${170 + current.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача' }, ...current]);
+    let created: Issue = { id: `ORB-${170 + issues.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача' };
+    try {
+      const response = await fetch('/api/issues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(created) });
+      if (response.ok) created = await response.json() as Issue;
+    } catch { /* Интерфейс остаётся рабочим, даже если локальный API остановлен. */ }
+    setIssues((current) => [created, ...current]);
     setNewTitle(''); setDialogOpen(false);
   };
 
@@ -81,23 +97,27 @@ export default function Home() {
       name: 'create_issue', title: 'Создать задачу', description: 'Создаёт новую задачу в колонке «К работе» на текущей доске.',
       inputSchema: { type: 'object', properties: { title: { type: 'string', minLength: 1 } }, required: ['title'], additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute(input) {
+      async execute(input) {
         const title = typeof input === 'object' && input !== null && 'title' in input ? String((input as { title: unknown }).title).trim() : '';
         if (!title) throw new Error('Название задачи обязательно');
-        const id = `ORB-${170 + issues.length}`;
-        setIssues((current) => [{ id, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача' }, ...current]);
-        return { id, status: 'backlog' };
+        let created: Issue = { id: `ORB-${170 + issues.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача' };
+        const response = await fetch('/api/issues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(created) });
+        if (response.ok) created = await response.json() as Issue;
+        setIssues((current) => [created, ...current]);
+        return { id: created.id, status: created.status };
       },
     });
     register({
       name: 'move_issue', title: 'Переместить задачу', description: 'Меняет статус задачи на текущей канбан-доске.',
       inputSchema: { type: 'object', properties: { id: { type: 'string' }, status: { type: 'string', enum: ['backlog', 'progress', 'review', 'done'] } }, required: ['id', 'status'], additionalProperties: false },
       annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute(input) {
+      async execute(input) {
         const value = input as { id?: unknown; status?: unknown };
         const id = String(value?.id ?? ''); const status = String(value?.status ?? '') as Status;
         if (!issues.some((issue) => issue.id === id)) throw new Error('Задача не найдена');
         if (!columns.some((column) => column.id === status)) throw new Error('Неизвестный статус');
+        const response = await fetch(`/api/issues/${encodeURIComponent(id)}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+        if (!response.ok) throw new Error('Не удалось изменить статус');
         setIssues((current) => current.map((issue) => issue.id === id ? { ...issue, status } : issue));
         return { id, status };
       },
