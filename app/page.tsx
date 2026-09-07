@@ -52,7 +52,7 @@ function IssueCard({ issue, onDragStart, onOpen }: { issue: Issue; onDragStart: 
   const priorityClass = issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low';
   return (
     <article className="issue-card" draggable onDragStart={(event) => onDragStart(event, issue.id)} onClick={() => onOpen(issue)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(issue); }} tabIndex={0}>
-      <div className="issue-card-top"><span className={`priority-dot ${priorityClass}`} title={`Приоритет: ${issue.priority}`} /><span className="issue-id">{issue.id}</span><button className="icon-button compact" aria-label={`Действия задачи ${issue.id}`}><MoreHorizontal /></button></div>
+      <div className="issue-card-top"><span className="issue-kind" title="Задача"><CheckCircle2 /></span><span className="issue-id">{issue.id}</span><span className={`priority-badge ${priorityClass}`}>{issue.priority}</span><button className="icon-button compact" onClick={(event) => event.stopPropagation()} aria-label={`Действия задачи ${issue.id}`}><MoreHorizontal /></button></div>
       <h3>{issue.title}</h3>
       {issue.label && <span className="issue-label">{issue.label}</span>}
       <div className="issue-card-bottom"><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar><span className="story-points">{issue.points}</span><span className="meta"><MessageSquare />{issue.comments}</span>{issue.attachments > 0 && <span className="meta"><Paperclip />{issue.attachments}</span>}</div>
