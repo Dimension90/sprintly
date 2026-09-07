@@ -43,4 +43,4 @@ $env:DATABASE_URL = "postgres://sprintly:sprintly@localhost:5432/sprintly?sslmod
 go run .
 ```
 
-API доступен на `http://localhost:8080`: `GET /api/issues`, `POST /api/issues`, `PATCH /api/issues/{id}/status`.
+API доступен на `http://localhost:8080`: `GET /api/issues`, `POST /api/issues`, `PUT /api/issues/{id}`, `DELETE /api/issues/{id}`.
