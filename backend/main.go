@@ -25,17 +25,37 @@ type Issue struct {
 	Comments    int       `json:"comments"`
 	Attachments int       `json:"attachments"`
 	Label       string    `json:"label,omitempty"`
+	SprintID    string    `json:"sprintId,omitempty"`
 	CreatedAt   time.Time `json:"createdAt"`
+}
+
+type Sprint struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Goal      string    `json:"goal"`
+	State     string    `json:"state"`
+	StartDate time.Time `json:"startDate"`
+	EndDate   time.Time `json:"endDate"`
 }
 
 type IssueStore interface {
 	List(context.Context) ([]Issue, error)
+	ListSprints(context.Context) ([]Sprint, error)
+	CreateSprint(context.Context, Sprint) (Sprint, error)
+	StartSprint(context.Context, string) (Sprint, error)
+	CompleteSprint(context.Context, string) (Sprint, error)
 	Create(context.Context, Issue) (Issue, error)
 	Update(context.Context, string, Issue) (Issue, error)
 	Delete(context.Context, string) error
 }
 
 type PostgresStore struct{ pool *pgxpool.Pool }
+
+var (
+	errNotFound     = errors.New("not found")
+	errInvalidState = errors.New("invalid state")
+	errActiveSprint = errors.New("an active sprint already exists")
+)
 
 func NewPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore, error) {
 	var pool *pgxpool.Pool
@@ -69,6 +89,16 @@ func (s *PostgresStore) Close() { s.pool.Close() }
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	statements := []string{
 		`CREATE SEQUENCE IF NOT EXISTS issue_number_seq START WITH 171`,
+		`CREATE SEQUENCE IF NOT EXISTS sprint_number_seq START WITH 25`,
+		`CREATE TABLE IF NOT EXISTS sprints (
+			id text PRIMARY KEY,
+			name text NOT NULL,
+			goal text NOT NULL DEFAULT '',
+			state text NOT NULL CHECK (state IN ('planned','active','completed')),
+			start_date timestamptz NOT NULL,
+			end_date timestamptz NOT NULL
+		)`,
+		`INSERT INTO sprints (id,name,goal,state,start_date,end_date) VALUES ('SPR-24','Спринт 24','Стабильный релиз продукта','active','2026-09-02T00:00:00Z','2026-09-15T23:59:59Z') ON CONFLICT (id) DO NOTHING`,
 		`CREATE TABLE IF NOT EXISTS issues (
 			id text PRIMARY KEY,
 			title text NOT NULL CHECK (length(trim(title)) > 0),
@@ -81,6 +111,8 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 			label text NOT NULL DEFAULT '',
 			created_at timestamptz NOT NULL DEFAULT now()
 		)`,
+		`ALTER TABLE issues ADD COLUMN IF NOT EXISTS sprint_id text DEFAULT 'SPR-24'`,
+		`ALTER TABLE issues ALTER COLUMN sprint_id DROP DEFAULT`,
 		`CREATE INDEX IF NOT EXISTS issues_status_created_idx ON issues(status, created_at)`,
 	}
 	for _, statement := range statements {
@@ -94,7 +126,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 	}
 	if count == 0 {
 		for _, issue := range seedIssues() {
-			_, err := s.pool.Exec(ctx, `INSERT INTO issues (id,title,status,priority,assignee,points,comments,attachments,label,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, issue.ID, issue.Title, issue.Status, issue.Priority, issue.Assignee, issue.Points, issue.Comments, issue.Attachments, issue.Label, issue.CreatedAt)
+			_, err := s.pool.Exec(ctx, `INSERT INTO issues (id,title,status,priority,assignee,points,comments,attachments,label,sprint_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, issue.ID, issue.Title, issue.Status, issue.Priority, issue.Assignee, issue.Points, issue.Comments, issue.Attachments, issue.Label, issue.SprintID, issue.CreatedAt)
 			if err != nil {
 				return fmt.Errorf("seed: %w", err)
 			}
@@ -104,7 +136,7 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 }
 
 func (s *PostgresStore) List(ctx context.Context) ([]Issue, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,title,status,priority,assignee,points,comments,attachments,label,created_at FROM issues ORDER BY created_at, id`)
+	rows, err := s.pool.Query(ctx, `SELECT id,title,status,priority,assignee,points,comments,attachments,label,COALESCE(sprint_id,''),created_at FROM issues ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +144,93 @@ func (s *PostgresStore) List(ctx context.Context) ([]Issue, error) {
 	issues := make([]Issue, 0, 32)
 	for rows.Next() {
 		var issue Issue
-		if err := rows.Scan(&issue.ID, &issue.Title, &issue.Status, &issue.Priority, &issue.Assignee, &issue.Points, &issue.Comments, &issue.Attachments, &issue.Label, &issue.CreatedAt); err != nil {
+		if err := rows.Scan(&issue.ID, &issue.Title, &issue.Status, &issue.Priority, &issue.Assignee, &issue.Points, &issue.Comments, &issue.Attachments, &issue.Label, &issue.SprintID, &issue.CreatedAt); err != nil {
 			return nil, err
 		}
 		issues = append(issues, issue)
 	}
 	return issues, rows.Err()
+}
+
+func (s *PostgresStore) ListSprints(ctx context.Context) ([]Sprint, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id,name,goal,state,start_date,end_date FROM sprints ORDER BY start_date DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var sprints []Sprint
+	for rows.Next() {
+		var sprint Sprint
+		if err := rows.Scan(&sprint.ID, &sprint.Name, &sprint.Goal, &sprint.State, &sprint.StartDate, &sprint.EndDate); err != nil {
+			return nil, err
+		}
+		sprints = append(sprints, sprint)
+	}
+	return sprints, rows.Err()
+}
+
+func (s *PostgresStore) CreateSprint(ctx context.Context, sprint Sprint) (Sprint, error) {
+	sprint.Name = strings.TrimSpace(sprint.Name)
+	sprint.Goal = strings.TrimSpace(sprint.Goal)
+	if sprint.Name == "" {
+		return Sprint{}, errors.New("name is required")
+	}
+	if sprint.StartDate.IsZero() || sprint.EndDate.IsZero() || !sprint.EndDate.After(sprint.StartDate) {
+		return Sprint{}, errors.New("invalid sprint dates")
+	}
+	sprint.State = "planned"
+	err := s.pool.QueryRow(ctx, `INSERT INTO sprints (id,name,goal,state,start_date,end_date) VALUES ('SPR-' || nextval('sprint_number_seq'),$1,$2,$3,$4,$5) RETURNING id`, sprint.Name, sprint.Goal, sprint.State, sprint.StartDate, sprint.EndDate).Scan(&sprint.ID)
+	return sprint, err
+}
+
+func (s *PostgresStore) StartSprint(ctx context.Context, id string) (Sprint, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Sprint{}, err
+	}
+	defer tx.Rollback(ctx)
+	var active int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM sprints WHERE state='active' AND id<>$1`, id).Scan(&active); err != nil {
+		return Sprint{}, err
+	}
+	if active > 0 {
+		return Sprint{}, errActiveSprint
+	}
+	var sprint Sprint
+	err = tx.QueryRow(ctx, `UPDATE sprints SET state='active' WHERE id=$1 AND state='planned' RETURNING id,name,goal,state,start_date,end_date`, id).Scan(&sprint.ID, &sprint.Name, &sprint.Goal, &sprint.State, &sprint.StartDate, &sprint.EndDate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Sprint{}, errInvalidState
+	}
+	if err != nil {
+		return Sprint{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Sprint{}, err
+	}
+	return sprint, nil
+}
+
+func (s *PostgresStore) CompleteSprint(ctx context.Context, id string) (Sprint, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return Sprint{}, err
+	}
+	defer tx.Rollback(ctx)
+	var sprint Sprint
+	err = tx.QueryRow(ctx, `UPDATE sprints SET state='completed' WHERE id=$1 AND state='active' RETURNING id,name,goal,state,start_date,end_date`, id).Scan(&sprint.ID, &sprint.Name, &sprint.Goal, &sprint.State, &sprint.StartDate, &sprint.EndDate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Sprint{}, errInvalidState
+	}
+	if err != nil {
+		return Sprint{}, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE issues SET sprint_id=NULL WHERE sprint_id=$1 AND status<>'done'`, id); err != nil {
+		return Sprint{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Sprint{}, err
+	}
+	return sprint, nil
 }
 
 func (s *PostgresStore) Create(ctx context.Context, issue Issue) (Issue, error) {
@@ -138,7 +251,7 @@ func (s *PostgresStore) Create(ctx context.Context, issue Issue) (Issue, error) 
 		issue.Label = "Новая задача"
 	}
 	issue.Status = "backlog"
-	err := s.pool.QueryRow(ctx, `INSERT INTO issues (id,title,status,priority,assignee,points,comments,attachments,label) VALUES ('ORB-' || nextval('issue_number_seq'),$1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,created_at`, issue.Title, issue.Status, issue.Priority, issue.Assignee, issue.Points, issue.Comments, issue.Attachments, issue.Label).Scan(&issue.ID, &issue.CreatedAt)
+	err := s.pool.QueryRow(ctx, `INSERT INTO issues (id,title,status,priority,assignee,points,comments,attachments,label,sprint_id) VALUES ('ORB-' || nextval('issue_number_seq'),$1,$2,$3,$4,$5,$6,$7,$8,NULLIF($9,'')) RETURNING id,created_at`, issue.Title, issue.Status, issue.Priority, issue.Assignee, issue.Points, issue.Comments, issue.Attachments, issue.Label, issue.SprintID).Scan(&issue.ID, &issue.CreatedAt)
 	return issue, err
 }
 
@@ -151,7 +264,7 @@ func (s *PostgresStore) Update(ctx context.Context, id string, input Issue) (Iss
 		return Issue{}, errors.New("invalid status")
 	}
 	var issue Issue
-	err := s.pool.QueryRow(ctx, `UPDATE issues SET title=$2,status=$3,priority=$4,assignee=$5,points=$6,label=$7 WHERE id=$1 RETURNING id,title,status,priority,assignee,points,comments,attachments,label,created_at`, id, input.Title, input.Status, input.Priority, input.Assignee, input.Points, input.Label).Scan(&issue.ID, &issue.Title, &issue.Status, &issue.Priority, &issue.Assignee, &issue.Points, &issue.Comments, &issue.Attachments, &issue.Label, &issue.CreatedAt)
+	err := s.pool.QueryRow(ctx, `UPDATE issues SET title=$2,status=$3,priority=$4,assignee=$5,points=$6,label=$7,sprint_id=NULLIF($8,'') WHERE id=$1 RETURNING id,title,status,priority,assignee,points,comments,attachments,label,COALESCE(sprint_id,''),created_at`, id, input.Title, input.Status, input.Priority, input.Assignee, input.Points, input.Label, input.SprintID).Scan(&issue.ID, &issue.Title, &issue.Status, &issue.Priority, &issue.Assignee, &issue.Points, &issue.Comments, &issue.Attachments, &issue.Label, &issue.SprintID, &issue.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Issue{}, errors.New("issue not found")
 	}
@@ -186,10 +299,66 @@ func (api API) routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "database": "postgresql"})
 	})
 	mux.HandleFunc("GET /api/issues", api.listIssues)
+	mux.HandleFunc("GET /api/sprints", api.listSprints)
+	mux.HandleFunc("POST /api/sprints", api.createSprint)
+	mux.HandleFunc("POST /api/sprints/{id}/start", api.startSprint)
+	mux.HandleFunc("POST /api/sprints/{id}/complete", api.completeSprint)
 	mux.HandleFunc("POST /api/issues", api.createIssue)
 	mux.HandleFunc("PUT /api/issues/{id}", api.updateIssue)
 	mux.HandleFunc("DELETE /api/issues/{id}", api.deleteIssue)
 	return withLogging(mux)
+}
+
+func (api API) listSprints(w http.ResponseWriter, r *http.Request) {
+	sprints, err := api.store.ListSprints(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list sprints")
+		return
+	}
+	writeJSON(w, http.StatusOK, sprints)
+}
+
+func (api API) createSprint(w http.ResponseWriter, r *http.Request) {
+	var input Sprint
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	sprint, err := api.store.CreateSprint(r.Context(), input)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, sprint)
+}
+
+func (api API) startSprint(w http.ResponseWriter, r *http.Request) {
+	sprint, err := api.store.StartSprint(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeSprintError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sprint)
+}
+
+func (api API) completeSprint(w http.ResponseWriter, r *http.Request) {
+	sprint, err := api.store.CompleteSprint(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeSprintError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sprint)
+}
+
+func writeSprintError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, errInvalidState), errors.Is(err, errActiveSprint):
+		writeError(w, http.StatusConflict, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "sprint operation failed")
+	}
 }
 
 func (api API) listIssues(w http.ResponseWriter, r *http.Request) {
@@ -265,8 +434,8 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func seedIssues() []Issue {
 	now := time.Now().UTC()
 	return []Issue{
-		{ID: "ORB-142", Title: "Обновить онбординг для новых команд", Status: "backlog", Priority: "Высокий", Assignee: "АК", Points: 5, Comments: 8, Attachments: 2, Label: "Продукт", CreatedAt: now},
-		{ID: "ORB-156", Title: "Добавить быстрые фильтры на доску", Status: "backlog", Priority: "Средний", Assignee: "МЛ", Points: 3, Comments: 3, Label: "UX", CreatedAt: now.Add(time.Second)},
+		{ID: "ORB-142", Title: "Обновить онбординг для новых команд", Status: "backlog", Priority: "Высокий", Assignee: "АК", Points: 5, Comments: 8, Attachments: 2, Label: "Продукт", SprintID: "SPR-24", CreatedAt: now},
+		{ID: "ORB-156", Title: "Добавить быстрые фильтры на доску", Status: "backlog", Priority: "Средний", Assignee: "МЛ", Points: 3, Comments: 3, Label: "UX", SprintID: "SPR-24", CreatedAt: now.Add(time.Second)},
 		{ID: "ORB-161", Title: "Тексты пустых состояний", Status: "backlog", Priority: "Низкий", Assignee: "ЕС", Points: 2, Comments: 1, Attachments: 1, Label: "Контент", CreatedAt: now.Add(2 * time.Second)},
 		{ID: "ORB-133", Title: "Новый экран аналитики спринта", Status: "progress", Priority: "Высокий", Assignee: "ДР", Points: 8, Comments: 12, Attachments: 4, Label: "Дизайн", CreatedAt: now.Add(3 * time.Second)},
 		{ID: "ORB-149", Title: "Оптимизировать загрузку карточек", Status: "progress", Priority: "Средний", Assignee: "АК", Points: 5, Comments: 5, Attachments: 1, Label: "Backend", CreatedAt: now.Add(4 * time.Second)},

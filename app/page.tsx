@@ -22,7 +22,8 @@ type Status = 'backlog' | 'progress' | 'review' | 'done';
 type Priority = 'Высокий' | 'Средний' | 'Низкий';
 type ViewMode = 'board' | 'list';
 type Theme = 'light' | 'dark';
-type Issue = { id: string; title: string; status: Status; priority: Priority; assignee: string; points: number; comments: number; attachments: number; label?: string };
+type Issue = { id: string; title: string; status: Status; priority: Priority; assignee: string; points: number; comments: number; attachments: number; label?: string; sprintId?: string };
+type Sprint = { id: string; name: string; goal: string; state: 'planned' | 'active' | 'completed'; startDate: string; endDate: string };
 
 type ModelTool = { name: string; title: string; description: string; inputSchema: object; annotations: { readOnlyHint: boolean; untrustedContentHint: boolean }; execute(input: unknown): unknown };
 declare global { interface Document { modelContext?: { registerTool(tool: ModelTool, options?: { signal?: AbortSignal }): void | Promise<void> } } }
@@ -34,7 +35,7 @@ const columns: { id: Status; title: string; hint: string }[] = [
   { id: 'done', title: 'Готово', hint: 'За эту неделю' },
 ];
 
-const initialIssues: Issue[] = [
+const initialIssues: Issue[] = ([
   { id: 'ORB-142', title: 'Обновить онбординг для новых команд', status: 'backlog', priority: 'Высокий', assignee: 'АК', points: 5, comments: 8, attachments: 2, label: 'Продукт' },
   { id: 'ORB-156', title: 'Добавить быстрые фильтры на доску', status: 'backlog', priority: 'Средний', assignee: 'МЛ', points: 3, comments: 3, attachments: 0, label: 'UX' },
   { id: 'ORB-161', title: 'Тексты пустых состояний', status: 'backlog', priority: 'Низкий', assignee: 'ЕС', points: 2, comments: 1, attachments: 1, label: 'Контент' },
@@ -45,7 +46,7 @@ const initialIssues: Issue[] = [
   { id: 'ORB-145', title: 'Экспорт отчёта в CSV', status: 'review', priority: 'Низкий', assignee: 'ДР', points: 3, comments: 4, attachments: 1, label: 'Backend' },
   { id: 'ORB-121', title: 'Единая система уведомлений', status: 'done', priority: 'Средний', assignee: 'АК', points: 8, comments: 10, attachments: 2, label: 'Platform' },
   { id: 'ORB-129', title: 'Профиль и часовой пояс', status: 'done', priority: 'Низкий', assignee: 'МЛ', points: 3, comments: 2, attachments: 0, label: 'Frontend' },
-];
+] as Issue[]).map((issue) => ({ ...issue, sprintId: 'SPR-24' }));
 
 const avatarColors: Record<string, string> = { АК: 'bg-[#d7ff64] text-[#203100]', МЛ: 'bg-[#ffd5eb] text-[#7e1a50]', ЕС: 'bg-[#c9e2ff] text-[#104d80]', ДР: 'bg-[#ded5ff] text-[#3f2b8a]' };
 
@@ -63,7 +64,7 @@ function IssueCard({ issue, onDragStart, onOpen }: { issue: Issue; onDragStart: 
   );
 }
 
-function IssueDetails({ issue, onSave, onDelete, onClose }: { issue: Issue; onSave: (issue: Issue) => Promise<void>; onDelete: (id: string) => Promise<void>; onClose: () => void }) {
+function IssueDetails({ issue, activeSprint, onSave, onDelete, onClose }: { issue: Issue; activeSprint?: Sprint; onSave: (issue: Issue) => Promise<void>; onDelete: (id: string) => Promise<void>; onClose: () => void }) {
   const [draft, setDraft] = useState(issue);
   const [saving, setSaving] = useState(false);
   useEffect(() => setDraft(issue), [issue]);
@@ -79,6 +80,7 @@ function IssueDetails({ issue, onSave, onDelete, onClose }: { issue: Issue; onSa
           <label className="editor-field">Приоритет<Select value={draft.priority} onValueChange={(value) => setDraft({ ...draft, priority: value as Priority })}><SelectTrigger className="editor-select"><SelectValue /></SelectTrigger><SelectContent>{(['Высокий','Средний','Низкий'] as Priority[]).map((priority) => <SelectItem key={priority} value={priority}>{priority}</SelectItem>)}</SelectContent></Select></label>
           <label className="editor-field">Исполнитель<Select value={draft.assignee} onValueChange={(value) => setDraft({ ...draft, assignee: value as string })}><SelectTrigger className="editor-select"><SelectValue /></SelectTrigger><SelectContent>{Object.keys(avatarColors).map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select></label>
           <label className="editor-field">Оценка<Input type="number" min="0" max="100" value={draft.points} onChange={(event) => setDraft({ ...draft, points: Number(event.target.value) })} /></label>
+          <label className="editor-field">Спринт<Select value={draft.sprintId || 'backlog'} onValueChange={(value) => setDraft({ ...draft, sprintId: value === 'backlog' ? '' : String(value) })}><SelectTrigger className="editor-select"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="backlog">Бэклог</SelectItem>{activeSprint && <SelectItem value={activeSprint.id}>{activeSprint.name}</SelectItem>}</SelectContent></Select></label>
           <label className="editor-field full">Метка<Input value={draft.label ?? ''} onChange={(event) => setDraft({ ...draft, label: event.target.value })} /></label>
         </div>
         <div className="issue-sheet-footer">
@@ -90,15 +92,34 @@ function IssueDetails({ issue, onSave, onDelete, onClose }: { issue: Issue; onSa
   );
 }
 
+function BacklogView({ sprint, plannedSprints, sprintIssues, backlogIssues, onOpen, onMove, onCreate, onCreateSprint, onStartSprint, onCompleteSprint }: { sprint: Sprint; plannedSprints: Sprint[]; sprintIssues: Issue[]; backlogIssues: Issue[]; onOpen: (issue: Issue) => void; onMove: (issue: Issue, sprintId: string) => void; onCreate: () => void; onCreateSprint: () => void; onStartSprint: (id: string) => void; onCompleteSprint: (id: string) => void }) {
+  const group = (title: string, subtitle: string, items: Issue[], inSprint: boolean) => (
+    <section className="backlog-group">
+      <header className="backlog-group-header"><div><h2>{title}<span>{items.length}</span></h2><p>{subtitle}</p></div>{!inSprint && <Button size="sm" onClick={onCreate}><Plus />Создать задачу</Button>}</header>
+      <div className="backlog-rows">{items.map((issue) => <div className="backlog-row" key={issue.id} onClick={() => onOpen(issue)}><span className="issue-kind"><CheckCircle2 /></span><strong>{issue.id}</strong><span className="backlog-title">{issue.title}</span><span className={`priority-badge ${issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low'}`}>{issue.priority}</span><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar><span className="story-points">{issue.points}</span><Button variant="ghost" size="sm" onClick={(event) => { event.stopPropagation(); onMove(issue, inSprint ? '' : sprint.id); }}>{inSprint ? 'В бэклог' : 'В спринт'}</Button></div>)}</div>
+      {items.length === 0 && <div className="backlog-empty">Здесь пока нет задач.</div>}
+    </section>
+  );
+  return <div className="backlog-view"><div className="planning-toolbar"><div><strong>Планирование</strong><span>Подготовьте следующий спринт, пока команда работает над текущим.</span></div><Button variant="outline" onClick={onCreateSprint}><Plus />Новый спринт</Button></div>{sprint.id ? <section className="backlog-group active-sprint-group"><header className="backlog-group-header"><div><h2>{sprint.name}<span>{sprintIssues.length}</span><em>Активный</em></h2><p>{sprint.goal}</p></div><AlertDialog><AlertDialogTrigger render={<Button variant="outline" size="sm" />}>Завершить спринт</AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Завершить {sprint.name}?</AlertDialogTitle><AlertDialogDescription>Готовые задачи останутся в спринте, остальные вернутся в бэклог.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Отмена</AlertDialogCancel><AlertDialogAction onClick={() => onCompleteSprint(sprint.id)}>Завершить</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></header><div className="backlog-rows">{sprintIssues.map((issue) => <div className="backlog-row" key={issue.id} onClick={() => onOpen(issue)}><span className="issue-kind"><CheckCircle2 /></span><strong>{issue.id}</strong><span className="backlog-title">{issue.title}</span><span className={`priority-badge ${issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low'}`}>{issue.priority}</span><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar><span className="story-points">{issue.points}</span><Button variant="ghost" size="sm" onClick={(event) => { event.stopPropagation(); onMove(issue, ''); }}>В бэклог</Button></div>)}</div></section> : <section className="no-active-sprint"><strong>Нет активного спринта</strong><span>Запустите один из подготовленных спринтов ниже.</span></section>}{plannedSprints.map((planned) => <section className="planned-sprint" key={planned.id}><div><strong>{planned.name}</strong><span>{planned.goal || 'Цель пока не указана'}</span></div><span>{new Date(planned.startDate).toLocaleDateString('ru-RU')} — {new Date(planned.endDate).toLocaleDateString('ru-RU')}</span><Button size="sm" onClick={() => onStartSprint(planned.id)}>Запустить</Button></section>)}{group('Бэклог', 'Задачи, которые ещё не добавлены в спринт', backlogIssues, false)}</div>;
+}
+
 export default function Home() {
   const [issues, setIssues] = useState(initialIssues);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [query, setQuery] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [sprintDialogOpen, setSprintDialogOpen] = useState(false);
+  const [newSprintName, setNewSprintName] = useState('Спринт 25');
+  const [newSprintGoal, setNewSprintGoal] = useState('');
+  const [newSprintStart, setNewSprintStart] = useState('2026-09-16');
+  const [newSprintEnd, setNewSprintEnd] = useState('2026-09-29');
+  const [planningError, setPlanningError] = useState('');
   const [mobileNav, setMobileNav] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('board');
+  const [section, setSection] = useState<'board' | 'backlog'>('board');
   const [theme, setTheme] = useState<Theme>('light');
   const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all');
   const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
@@ -109,6 +130,9 @@ export default function Home() {
     const preferred: Theme = saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     setTheme(preferred);
     document.documentElement.classList.toggle('dark', preferred === 'dark');
+  }, []);
+  useEffect(() => {
+    fetch('/api/sprints').then((response) => response.ok ? response.json() : Promise.reject()).then((data: Sprint[]) => setSprints(data)).catch(() => undefined);
   }, []);
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -136,6 +160,10 @@ export default function Home() {
     });
   }, [issues, query, statusFilter, priorityFilter, assigneeFilter]);
   const activeFilterCount = [statusFilter, priorityFilter, assigneeFilter].filter((value) => value !== 'all').length;
+  const activeSprint = sprints.find((sprint) => sprint.state === 'active') ?? { id: '', name: 'Нет активного спринта', goal: '', state: 'active' as const, startDate: '', endDate: '' };
+  const sprintIssues = visibleIssues.filter((issue) => issue.sprintId === activeSprint.id);
+  const backlogIssues = visibleIssues.filter((issue) => !issue.sprintId);
+  const plannedSprints = sprints.filter((sprint) => sprint.state === 'planned');
   const toggleTheme = () => {
     const next: Theme = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
@@ -152,7 +180,7 @@ export default function Home() {
   const onDrop = (event: DragEvent, status: Status) => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (id) moveIssue(id, status); };
   const createIssue = async () => {
     const title = newTitle.trim(); if (!title) return;
-    let created: Issue = { id: `ORB-${170 + issues.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача' };
+    let created: Issue = { id: `ORB-${170 + issues.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача', sprintId: section === 'board' ? activeSprint.id : '' };
     try {
       const response = await fetch('/api/issues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(created) });
       if (response.ok) created = await response.json() as Issue;
@@ -173,6 +201,36 @@ export default function Home() {
     setIssues((current) => current.filter((issue) => issue.id !== id));
     setSelectedIssue(null);
   };
+  const assignIssueToSprint = async (issue: Issue, sprintId: string) => {
+    const updated = { ...issue, sprintId };
+    setIssues((current) => current.map((item) => item.id === issue.id ? updated : item));
+    try {
+      const response = await fetch(`/api/issues/${encodeURIComponent(issue.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) });
+      if (!response.ok) throw new Error();
+      const saved = await response.json() as Issue;
+      setIssues((current) => current.map((item) => item.id === saved.id ? saved : item));
+    } catch {
+      setIssues((current) => current.map((item) => item.id === issue.id ? issue : item));
+    }
+  };
+  const refreshPlanning = async () => {
+    const [issueResponse, sprintResponse] = await Promise.all([fetch('/api/issues'), fetch('/api/sprints')]);
+    if (!issueResponse.ok || !sprintResponse.ok) throw new Error('Не удалось обновить данные');
+    setIssues(await issueResponse.json() as Issue[]);
+    setSprints(await sprintResponse.json() as Sprint[]);
+  };
+  const createSprint = async () => {
+    setPlanningError('');
+    const response = await fetch('/api/sprints', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newSprintName, goal: newSprintGoal, startDate: `${newSprintStart}T00:00:00Z`, endDate: `${newSprintEnd}T23:59:59Z` }) });
+    if (!response.ok) { const body = await response.json().catch(() => ({})) as { error?: string }; setPlanningError(body.error ?? 'Не удалось создать спринт'); return; }
+    await refreshPlanning(); setSprintDialogOpen(false); setNewSprintGoal('');
+  };
+  const changeSprintState = async (id: string, action: 'start' | 'complete') => {
+    setPlanningError('');
+    const response = await fetch(`/api/sprints/${encodeURIComponent(id)}/${action}`, { method: 'POST' });
+    if (!response.ok) { const body = await response.json().catch(() => ({})) as { error?: string }; setPlanningError(body.error ?? 'Не удалось изменить спринт'); return; }
+    await refreshPlanning();
+  };
 
   useEffect(() => {
     const context = document.modelContext;
@@ -186,7 +244,7 @@ export default function Home() {
       async execute(input) {
         const title = typeof input === 'object' && input !== null && 'title' in input ? String((input as { title: unknown }).title).trim() : '';
         if (!title) throw new Error('Название задачи обязательно');
-        let created: Issue = { id: `ORB-${170 + issues.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача' };
+        let created: Issue = { id: `ORB-${170 + issues.length}`, title, status: 'backlog', priority: 'Средний', assignee: 'АК', points: 3, comments: 0, attachments: 0, label: 'Новая задача', sprintId: activeSprint.id };
         const response = await fetch('/api/issues', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(created) });
         if (response.ok) created = await response.json() as Issue;
         setIssues((current) => [created, ...current]);
@@ -210,7 +268,7 @@ export default function Home() {
       },
     });
     return () => lifecycle.abort();
-  }, [issues]);
+  }, [issues, activeSprint.id]);
 
   return (
     <main className="app-shell">
@@ -218,8 +276,8 @@ export default function Home() {
         <div className="brand"><BrandMark /><span>Sprintly</span><button className="mobile-close" onClick={() => setMobileNav(false)} aria-label="Закрыть меню">×</button></div>
         <div className="workspace-switcher"><span className="workspace-logo">O</span><span><strong>Orbit Labs</strong><small>Software project</small></span></div>
         <nav className="main-nav" aria-label="Основная навигация">
-          <button className={viewMode === 'board' && statusFilter === 'all' ? 'active' : ''} onClick={() => { setViewMode('board'); setStatusFilter('all'); setMobileNav(false); }}><LayoutDashboard />Доска</button>
-          <button className={viewMode === 'list' && statusFilter === 'backlog' ? 'active' : ''} onClick={() => { setViewMode('list'); setStatusFilter('backlog'); setMobileNav(false); }}><Inbox />Бэклог<span className="nav-count">{issues.filter((issue) => issue.status === 'backlog').length}</span></button>
+          <button className={section === 'board' ? 'active' : ''} onClick={() => { setSection('board'); setStatusFilter('all'); setMobileNav(false); }}><LayoutDashboard />Доска</button>
+          <button className={section === 'backlog' ? 'active' : ''} onClick={() => { setSection('backlog'); setStatusFilter('all'); setMobileNav(false); }}><Inbox />Бэклог<span className="nav-count">{backlogIssues.length}</span></button>
         </nav>
         <div className="nav-section-label">Рабочие пространства</div>
         <nav className="project-nav" aria-label="Проекты"><div className="project-current"><span className="project-symbol coral">O</span>Orbit App</div></nav>
@@ -235,25 +293,26 @@ export default function Home() {
             <div className="team-stack" aria-label="Участники команды"><Avatar size="sm"><AvatarFallback className={avatarColors['ЕС']}>ЕС</AvatarFallback></Avatar><Avatar size="sm"><AvatarFallback className={avatarColors['МЛ']}>МЛ</AvatarFallback></Avatar><Avatar size="sm"><AvatarFallback className={avatarColors['ДР']}>ДР</AvatarFallback></Avatar><span>+5</span></div>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger render={<Button className="create-button" size="lg" />}><Plus />Создать</DialogTrigger>
-              <DialogContent className="create-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Новая задача</DialogTitle><DialogDescription>Она появится в колонке «К работе» со средним приоритетом.</DialogDescription></DialogHeader><label className="dialog-field">Название<Input autoFocus value={newTitle} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createIssue(); }} placeholder="Например, добавить импорт из CSV" /></label><div className="dialog-grid"><label className="dialog-field">Тип<div className="fake-select"><Layers3 />Задача</div></label><label className="dialog-field">Приоритет<div className="fake-select"><span className="priority-dot priority-medium" />Средний</div></label></div><DialogFooter><DialogClose render={<Button variant="ghost" />}>Отмена</DialogClose><Button onClick={createIssue} disabled={!newTitle.trim()}>Создать задачу</Button></DialogFooter></DialogContent>
+              <DialogContent className="create-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Новая задача</DialogTitle><DialogDescription>{section === 'board' && activeSprint.id ? `Она появится в колонке «К работе» спринта «${activeSprint.name}».` : 'Она появится в бэклоге, откуда её можно добавить в спринт.'}</DialogDescription></DialogHeader><label className="dialog-field">Название<Input autoFocus value={newTitle} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createIssue(); }} placeholder="Например, добавить импорт из CSV" /></label><div className="dialog-grid"><label className="dialog-field">Тип<div className="fake-select"><Layers3 />Задача</div></label><label className="dialog-field">Приоритет<div className="fake-select"><span className="priority-dot priority-medium" />Средний</div></label></div><DialogFooter><DialogClose render={<Button variant="ghost" />}>Отмена</DialogClose><Button onClick={createIssue} disabled={!newTitle.trim()}>Создать задачу</Button></DialogFooter></DialogContent>
             </Dialog>
           </div>
         </header>
 
         <div className="board-header">
           <div className="eyebrow"><span>Проекты</span><span>/</span><strong>Orbit App</strong></div>
-          <div className="title-row"><div><h1>Разработка продукта</h1><p>Спринт 24 · 2–15 сентября</p></div><div className="header-actions"><Dialog open={filterOpen} onOpenChange={setFilterOpen}><DialogTrigger render={<Button variant="outline" className={activeFilterCount ? 'filter-active' : ''} />}><Filter />Фильтр{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}</DialogTrigger><DialogContent className="filter-dialog sm:max-w-md"><DialogHeader><DialogTitle>Фильтры задач</DialogTitle><DialogDescription>Показываем только задачи, которые подходят под все условия.</DialogDescription></DialogHeader><div className="filter-fields"><label className="dialog-field">Статус<Select value={statusFilter} onValueChange={(value) => setStatusFilter((value ?? 'all') as Status | 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все статусы</SelectItem>{columns.map((column) => <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>)}</SelectContent></Select></label><label className="dialog-field">Приоритет<Select value={priorityFilter} onValueChange={(value) => setPriorityFilter((value ?? 'all') as Priority | 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все приоритеты</SelectItem>{(['Высокий','Средний','Низкий'] as Priority[]).map((priority) => <SelectItem key={priority} value={priority}>{priority}</SelectItem>)}</SelectContent></Select></label><label className="dialog-field">Исполнитель<Select value={assigneeFilter} onValueChange={(value) => setAssigneeFilter(value ?? 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все исполнители</SelectItem>{Object.keys(avatarColors).map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select></label></div><DialogFooter><Button variant="ghost" onClick={() => { setStatusFilter('all'); setPriorityFilter('all'); setAssigneeFilter('all'); }}>Сбросить</Button><DialogClose render={<Button />}>Показать {visibleIssues.length}</DialogClose></DialogFooter></DialogContent></Dialog></div></div>
-          <div className="sprint-strip"><div className="metric"><span className="metric-icon blue"><Clock3 /></span><span><strong>9 дней</strong><small>до завершения</small></span></div><div className="metric"><span className="metric-icon pink"><Layers3 /></span><span><strong>{issues.reduce((sum, issue) => sum + issue.points, 0)} points</strong><small>в текущем спринте</small></span></div><div className="metric progress-metric"><div className="metric-label"><span><strong>68%</strong><small>прогресс спринта</small></span><span>34 / 50</span></div><div className="progress-track"><span /></div></div><div className="view-toggle"><button className={viewMode === 'board' ? 'active' : ''} onClick={() => setViewMode('board')}><LayoutDashboard />Доска</button><button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><Layers3 />Список</button></div></div>
+          <div className="title-row"><div><h1>{section === 'board' ? 'Разработка продукта' : 'Бэклог продукта'}</h1><p>{activeSprint.id ? `${activeSprint.name} · ${new Date(activeSprint.startDate).toLocaleDateString('ru-RU')} — ${new Date(activeSprint.endDate).toLocaleDateString('ru-RU')}` : 'Нет активного спринта'}</p></div><div className="header-actions"><Dialog open={filterOpen} onOpenChange={setFilterOpen}><DialogTrigger render={<Button variant="outline" className={activeFilterCount ? 'filter-active' : ''} />}><Filter />Фильтр{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}</DialogTrigger><DialogContent className="filter-dialog sm:max-w-md"><DialogHeader><DialogTitle>Фильтры задач</DialogTitle><DialogDescription>Показываем только задачи, которые подходят под все условия.</DialogDescription></DialogHeader><div className="filter-fields"><label className="dialog-field">Статус<Select value={statusFilter} onValueChange={(value) => setStatusFilter((value ?? 'all') as Status | 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все статусы</SelectItem>{columns.map((column) => <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>)}</SelectContent></Select></label><label className="dialog-field">Приоритет<Select value={priorityFilter} onValueChange={(value) => setPriorityFilter((value ?? 'all') as Priority | 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все приоритеты</SelectItem>{(['Высокий','Средний','Низкий'] as Priority[]).map((priority) => <SelectItem key={priority} value={priority}>{priority}</SelectItem>)}</SelectContent></Select></label><label className="dialog-field">Исполнитель<Select value={assigneeFilter} onValueChange={(value) => setAssigneeFilter(value ?? 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все исполнители</SelectItem>{Object.keys(avatarColors).map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select></label></div><DialogFooter><Button variant="ghost" onClick={() => { setStatusFilter('all'); setPriorityFilter('all'); setAssigneeFilter('all'); }}>Сбросить</Button><DialogClose render={<Button />}>Показать {visibleIssues.length}</DialogClose></DialogFooter></DialogContent></Dialog></div></div>
+          <div className="sprint-strip"><div className="metric"><span className="metric-icon blue"><Clock3 /></span><span><strong>9 дней</strong><small>до завершения</small></span></div><div className="metric"><span className="metric-icon pink"><Layers3 /></span><span><strong>{sprintIssues.reduce((sum, issue) => sum + issue.points, 0)} points</strong><small>в текущем спринте</small></span></div><div className="metric progress-metric"><div className="metric-label"><span><strong>{sprintIssues.length ? Math.round(sprintIssues.filter((issue) => issue.status === 'done').length / sprintIssues.length * 100) : 0}%</strong><small>прогресс спринта</small></span><span>{sprintIssues.filter((issue) => issue.status === 'done').length} / {sprintIssues.length}</span></div><div className="progress-track"><span style={{ width: `${sprintIssues.length ? sprintIssues.filter((issue) => issue.status === 'done').length / sprintIssues.length * 100 : 0}%` }} /></div></div>{section === 'board' && <div className="view-toggle"><button className={viewMode === 'board' ? 'active' : ''} onClick={() => setViewMode('board')}><LayoutDashboard />Доска</button><button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><Layers3 />Список</button></div>}</div>
         </div>
 
-        {viewMode === 'board' ? <section className="kanban" id="board" aria-label="Канбан-доска">
-          {columns.map((column) => { const columnIssues = visibleIssues.filter((issue) => issue.status === column.id); const ColumnIcon = column.id === 'done' ? CheckCircle2 : column.id === 'review' ? Eye : column.id === 'progress' ? Clock3 : Circle; return (
+        {section === 'board' ? (viewMode === 'board' ? <section className="kanban" id="board" aria-label="Канбан-доска">
+          {columns.map((column) => { const columnIssues = sprintIssues.filter((issue) => issue.status === column.id); const ColumnIcon = column.id === 'done' ? CheckCircle2 : column.id === 'review' ? Eye : column.id === 'progress' ? Clock3 : Circle; return (
             <div className={`kanban-column column-${column.id}`} key={column.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, column.id)}>
               <div className="column-heading"><div><ColumnIcon /><strong>{column.title}</strong><span>{columnIssues.length}</span></div><button aria-label={`Добавить в ${column.title}`} onClick={() => setDialogOpen(true)}><Plus /></button></div><p className="column-hint">{column.hint}</p><div className="card-stack">{columnIssues.map((issue) => <IssueCard key={issue.id} issue={issue} onOpen={setSelectedIssue} onDragStart={(event, id) => event.dataTransfer.setData('text/plain', id)} />)}{columnIssues.length === 0 && <div className="empty-column">Перетащите задачу сюда</div>}</div><button className="add-issue" onClick={() => setDialogOpen(true)}><Plus />Добавить задачу</button>
             </div> ); })}
-        </section> : <section className="issue-list" aria-label="Список задач"><div className="list-summary"><strong>{visibleIssues.length} задач</strong><span>{activeFilterCount ? `Активных фильтров: ${activeFilterCount}` : 'Все задачи текущего спринта'}</span></div><Table><TableHeader><TableRow><TableHead>Ключ</TableHead><TableHead>Задача</TableHead><TableHead>Статус</TableHead><TableHead>Приоритет</TableHead><TableHead>Исполнитель</TableHead><TableHead className="points-cell">SP</TableHead></TableRow></TableHeader><TableBody>{visibleIssues.map((issue) => { const column = columns.find((item) => item.id === issue.status); const priorityClass = issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low'; return <TableRow key={issue.id} className="issue-list-row" tabIndex={0} onClick={() => setSelectedIssue(issue)} onKeyDown={(event) => { if (event.key === 'Enter') setSelectedIssue(issue); }}><TableCell className="list-key"><span className="issue-kind"><CheckCircle2 /></span>{issue.id}</TableCell><TableCell className="list-title">{issue.title}</TableCell><TableCell><span className={`status-pill status-${issue.status}`}>{column?.title}</span></TableCell><TableCell><span className={`priority-badge ${priorityClass}`}>{issue.priority}</span></TableCell><TableCell><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar></TableCell><TableCell className="points-cell">{issue.points}</TableCell></TableRow>; })}</TableBody></Table>{visibleIssues.length === 0 && <div className="empty-list">Ничего не найдено. Измените поиск или сбросьте фильтры.</div>}</section>}
+        </section> : <section className="issue-list" aria-label="Список задач"><div className="list-summary"><strong>{sprintIssues.length} задач</strong><span>{activeFilterCount ? `Активных фильтров: ${activeFilterCount}` : 'Все задачи текущего спринта'}</span></div><Table><TableHeader><TableRow><TableHead>Ключ</TableHead><TableHead>Задача</TableHead><TableHead>Статус</TableHead><TableHead>Приоритет</TableHead><TableHead>Исполнитель</TableHead><TableHead className="points-cell">SP</TableHead></TableRow></TableHeader><TableBody>{sprintIssues.map((issue) => { const column = columns.find((item) => item.id === issue.status); const priorityClass = issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low'; return <TableRow key={issue.id} className="issue-list-row" tabIndex={0} onClick={() => setSelectedIssue(issue)} onKeyDown={(event) => { if (event.key === 'Enter') setSelectedIssue(issue); }}><TableCell className="list-key"><span className="issue-kind"><CheckCircle2 /></span>{issue.id}</TableCell><TableCell className="list-title">{issue.title}</TableCell><TableCell><span className={`status-pill status-${issue.status}`}>{column?.title}</span></TableCell><TableCell><span className={`priority-badge ${priorityClass}`}>{issue.priority}</span></TableCell><TableCell><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar></TableCell><TableCell className="points-cell">{issue.points}</TableCell></TableRow>; })}</TableBody></Table>{sprintIssues.length === 0 && <div className="empty-list">Ничего не найдено. Измените поиск или сбросьте фильтры.</div>}</section>) : <><BacklogView sprint={activeSprint} plannedSprints={plannedSprints} sprintIssues={sprintIssues} backlogIssues={backlogIssues} onOpen={setSelectedIssue} onMove={(issue, sprintId) => void assignIssueToSprint(issue, sprintId)} onCreate={() => setDialogOpen(true)} onCreateSprint={() => setSprintDialogOpen(true)} onStartSprint={(id) => void changeSprintState(id, 'start')} onCompleteSprint={(id) => void changeSprintState(id, 'complete')} />{planningError && <div className="planning-error" role="alert">{planningError}</div>}</>}
       </section>
-      {selectedIssue && <IssueDetails issue={selectedIssue} onSave={saveIssue} onDelete={deleteIssue} onClose={() => setSelectedIssue(null)} />}
+      <Dialog open={sprintDialogOpen} onOpenChange={setSprintDialogOpen}><DialogContent className="create-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Новый спринт</DialogTitle><DialogDescription>Спринт создастся в статусе «Запланирован».</DialogDescription></DialogHeader><div className="filter-fields"><label className="dialog-field">Название<Input value={newSprintName} onChange={(event) => setNewSprintName(event.target.value)} /></label><label className="dialog-field">Цель<Input value={newSprintGoal} onChange={(event) => setNewSprintGoal(event.target.value)} placeholder="Например, подготовить стабильный релиз" /></label><div className="dialog-grid"><label className="dialog-field">Начало<Input type="date" value={newSprintStart} onChange={(event) => setNewSprintStart(event.target.value)} /></label><label className="dialog-field">Завершение<Input type="date" value={newSprintEnd} onChange={(event) => setNewSprintEnd(event.target.value)} /></label></div>{planningError && <div className="dialog-error" role="alert">{planningError}</div>}</div><DialogFooter><DialogClose render={<Button variant="ghost" />}>Отмена</DialogClose><Button onClick={() => void createSprint()} disabled={!newSprintName.trim() || !newSprintStart || !newSprintEnd}>Создать спринт</Button></DialogFooter></DialogContent></Dialog>
+      {selectedIssue && <IssueDetails issue={selectedIssue} activeSprint={activeSprint.id ? activeSprint : undefined} onSave={saveIssue} onDelete={deleteIssue} onClose={() => setSelectedIssue(null)} />}
       {mobileNav && <button className="sidebar-backdrop" onClick={() => setMobileNav(false)} aria-label="Закрыть меню" />}
     </main>
   );
