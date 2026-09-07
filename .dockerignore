@@ -1,5 +1,4 @@
 .git
-.openai
 .wrangler
 node_modules
 backend/data

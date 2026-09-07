@@ -5,6 +5,9 @@ Jira-подобный трекер задач: интерактивная кан
 ## Возможности
 
 - поиск по ключу, названию и метке;
+- светлая и тёмная темы с сохранением выбора;
+- фильтры по статусу, приоритету и исполнителю;
+- представления «Доска» и «Список»;
 - создание задач через диалог;
 - перенос карточек между статусами drag-and-drop;
 - адаптивная доска для телефона и десктопа;
@@ -14,7 +17,6 @@ Jira-подобный трекер задач: интерактивная кан
 ## Запуск через Docker Compose
 
 ```powershell
-pnpm build
 docker compose up --build
 ```
 
@@ -24,23 +26,6 @@ docker compose up --build
 
 ```powershell
 docker compose down
-```
-
-## Запуск без Docker
-
-Фронтенд:
-
-```powershell
-pnpm install
-pnpm dev
-```
-
-Go API (из второго терминала, при доступном PostgreSQL):
-
-```powershell
-cd backend
-$env:DATABASE_URL = "postgres://sprintly:sprintly@localhost:5432/sprintly?sslmode=disable"
-go run .
 ```
 
 API доступен на `http://localhost:8080`: `GET /api/issues`, `POST /api/issues`, `PUT /api/issues/{id}`, `DELETE /api/issues/{id}`.

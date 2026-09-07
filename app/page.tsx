@@ -1,10 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState, type DragEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import {
-  BarChart3, Bell, CheckCircle2, ChevronDown, Circle, Clock3, Eye, Filter,
-  Inbox, Layers3, LayoutDashboard, Menu, MessageSquare, MoreHorizontal,
-  Paperclip, Plus, Rocket, Search, Settings, Trash2, Users,
+  CheckCircle2, Circle, Clock3, Eye, Filter,
+  Inbox, Layers3, LayoutDashboard, Menu, MessageSquare,
+  Moon, Paperclip, Plus, Search, Sun, Trash2,
 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -16,9 +16,12 @@ import { Input } from '@/components/ui/input';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 type Status = 'backlog' | 'progress' | 'review' | 'done';
 type Priority = 'Высокий' | 'Средний' | 'Низкий';
+type ViewMode = 'board' | 'list';
+type Theme = 'light' | 'dark';
 type Issue = { id: string; title: string; status: Status; priority: Priority; assignee: string; points: number; comments: number; attachments: number; label?: string };
 
 type ModelTool = { name: string; title: string; description: string; inputSchema: object; annotations: { readOnlyHint: boolean; untrustedContentHint: boolean }; execute(input: unknown): unknown };
@@ -52,7 +55,7 @@ function IssueCard({ issue, onDragStart, onOpen }: { issue: Issue; onDragStart: 
   const priorityClass = issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low';
   return (
     <article className="issue-card" draggable onDragStart={(event) => onDragStart(event, issue.id)} onClick={() => onOpen(issue)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(issue); }} tabIndex={0}>
-      <div className="issue-card-top"><span className="issue-kind" title="Задача"><CheckCircle2 /></span><span className="issue-id">{issue.id}</span><span className={`priority-badge ${priorityClass}`}>{issue.priority}</span><button className="icon-button compact" onClick={(event) => event.stopPropagation()} aria-label={`Действия задачи ${issue.id}`}><MoreHorizontal /></button></div>
+      <div className="issue-card-top"><span className="issue-kind" title="Задача"><CheckCircle2 /></span><span className="issue-id">{issue.id}</span><span className={`priority-badge ${priorityClass}`}>{issue.priority}</span></div>
       <h3>{issue.title}</h3>
       {issue.label && <span className="issue-label">{issue.label}</span>}
       <div className="issue-card-bottom"><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar><span className="story-points">{issue.points}</span><span className="meta"><MessageSquare />{issue.comments}</span>{issue.attachments > 0 && <span className="meta"><Paperclip />{issue.attachments}</span>}</div>
@@ -92,8 +95,31 @@ export default function Home() {
   const [query, setQuery] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('board');
+  const [theme, setTheme] = useState<Theme>('light');
+  const [statusFilter, setStatusFilter] = useState<Status | 'all'>('all');
+  const [priorityFilter, setPriorityFilter] = useState<Priority | 'all'>('all');
+  const [assigneeFilter, setAssigneeFilter] = useState<string>('all');
+  const searchRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const saved = localStorage.getItem('sprintly-theme') as Theme | null;
+    const preferred: Theme = saved ?? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    setTheme(preferred);
+    document.documentElement.classList.toggle('dark', preferred === 'dark');
+  }, []);
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, []);
   useEffect(() => {
     const controller = new AbortController();
     fetch('/api/issues', { signal: controller.signal })
@@ -102,7 +128,20 @@ export default function Home() {
       .catch(() => undefined);
     return () => controller.abort();
   }, []);
-  const visibleIssues = useMemo(() => { const value = query.trim().toLowerCase(); return value ? issues.filter((issue) => `${issue.id} ${issue.title} ${issue.label}`.toLowerCase().includes(value)) : issues }, [issues, query]);
+  const visibleIssues = useMemo(() => {
+    const value = query.trim().toLowerCase();
+    return issues.filter((issue) => {
+      const matchesQuery = !value || `${issue.id} ${issue.title} ${issue.label ?? ''}`.toLowerCase().includes(value);
+      return matchesQuery && (statusFilter === 'all' || issue.status === statusFilter) && (priorityFilter === 'all' || issue.priority === priorityFilter) && (assigneeFilter === 'all' || issue.assignee === assigneeFilter);
+    });
+  }, [issues, query, statusFilter, priorityFilter, assigneeFilter]);
+  const activeFilterCount = [statusFilter, priorityFilter, assigneeFilter].filter((value) => value !== 'all').length;
+  const toggleTheme = () => {
+    const next: Theme = theme === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    localStorage.setItem('sprintly-theme', next);
+    document.documentElement.classList.toggle('dark', next === 'dark');
+  };
   const moveIssue = (id: string, status: Status) => {
     const issue = issues.find((item) => item.id === id);
     if (!issue) return;
@@ -177,41 +216,42 @@ export default function Home() {
     <main className="app-shell">
       <aside className={`sidebar ${mobileNav ? 'sidebar-open' : ''}`}>
         <div className="brand"><BrandMark /><span>Sprintly</span><button className="mobile-close" onClick={() => setMobileNav(false)} aria-label="Закрыть меню">×</button></div>
-        <button className="workspace-switcher"><span className="workspace-logo">O</span><span><strong>Orbit Labs</strong><small>Software project</small></span><ChevronDown /></button>
+        <div className="workspace-switcher"><span className="workspace-logo">O</span><span><strong>Orbit Labs</strong><small>Software project</small></span></div>
         <nav className="main-nav" aria-label="Основная навигация">
-          <a className="active" href="#board"><LayoutDashboard />Доска</a><a href="#backlog"><Inbox />Бэклог<span className="nav-count">18</span></a><a href="#reports"><BarChart3 />Отчёты</a><a href="#releases"><Rocket />Релизы<span className="nav-dot" /></a><a href="#team"><Users />Команда</a>
+          <button className={viewMode === 'board' && statusFilter === 'all' ? 'active' : ''} onClick={() => { setViewMode('board'); setStatusFilter('all'); setMobileNav(false); }}><LayoutDashboard />Доска</button>
+          <button className={viewMode === 'list' && statusFilter === 'backlog' ? 'active' : ''} onClick={() => { setViewMode('list'); setStatusFilter('backlog'); setMobileNav(false); }}><Inbox />Бэклог<span className="nav-count">{issues.filter((issue) => issue.status === 'backlog').length}</span></button>
         </nav>
         <div className="nav-section-label">Рабочие пространства</div>
-        <nav className="project-nav" aria-label="Проекты"><a href="#orbit"><span className="project-symbol coral">O</span>Orbit App</a><a href="#website"><span className="project-symbol mint">W</span>Website 2.0</a><a href="#platform"><span className="project-symbol lilac">P</span>Platform</a><button><Plus />Новый проект</button></nav>
-        <div className="sidebar-footer"><a href="#settings"><Settings />Настройки</a><div className="profile"><Avatar><AvatarFallback className="bg-[#d7ff64] text-[#203100]">АК</AvatarFallback></Avatar><span><strong>Алексей К.</strong><small>Product lead</small></span><MoreHorizontal /></div></div>
+        <nav className="project-nav" aria-label="Проекты"><div className="project-current"><span className="project-symbol coral">O</span>Orbit App</div></nav>
+        <div className="sidebar-footer"><div className="profile"><Avatar><AvatarFallback className="bg-[#d7ff64] text-[#203100]">АК</AvatarFallback></Avatar><span><strong>Алексей К.</strong><small>Product lead</small></span></div></div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
           <button className="menu-button" onClick={() => setMobileNav(true)} aria-label="Открыть меню"><Menu /></button>
-          <div className="search-box"><Search /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск задач, проектов…" aria-label="Поиск задач" /><kbd>⌘ K</kbd></div>
+          <div className="search-box"><Search /><Input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск задач, проектов…" aria-label="Поиск задач" /><kbd>Ctrl K</kbd></div>
           <div className="topbar-actions">
-            <button className="icon-button has-alert" aria-label="Уведомления"><Bell /></button>
+            <button className="icon-button" onClick={toggleTheme} aria-label={theme === 'dark' ? 'Включить светлую тему' : 'Включить тёмную тему'} title={theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}>{theme === 'dark' ? <Sun /> : <Moon />}</button>
             <div className="team-stack" aria-label="Участники команды"><Avatar size="sm"><AvatarFallback className={avatarColors['ЕС']}>ЕС</AvatarFallback></Avatar><Avatar size="sm"><AvatarFallback className={avatarColors['МЛ']}>МЛ</AvatarFallback></Avatar><Avatar size="sm"><AvatarFallback className={avatarColors['ДР']}>ДР</AvatarFallback></Avatar><span>+5</span></div>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger render={<Button className="create-button" size="lg" />}><Plus />Создать</DialogTrigger>
-              <DialogContent className="create-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Новая задача</DialogTitle><DialogDescription>Она появится в колонке «К работе».</DialogDescription></DialogHeader><label className="dialog-field">Название<Input autoFocus value={newTitle} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createIssue(); }} placeholder="Например, добавить импорт из CSV" /></label><div className="dialog-grid"><label className="dialog-field">Тип<button className="fake-select"><Layers3 />Задача<ChevronDown /></button></label><label className="dialog-field">Приоритет<button className="fake-select"><span className="priority-dot priority-medium" />Средний<ChevronDown /></button></label></div><DialogFooter><DialogClose render={<Button variant="ghost" />}>Отмена</DialogClose><Button onClick={createIssue} disabled={!newTitle.trim()}>Создать задачу</Button></DialogFooter></DialogContent>
+              <DialogContent className="create-dialog sm:max-w-lg"><DialogHeader><DialogTitle>Новая задача</DialogTitle><DialogDescription>Она появится в колонке «К работе» со средним приоритетом.</DialogDescription></DialogHeader><label className="dialog-field">Название<Input autoFocus value={newTitle} onChange={(event) => setNewTitle(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') createIssue(); }} placeholder="Например, добавить импорт из CSV" /></label><div className="dialog-grid"><label className="dialog-field">Тип<div className="fake-select"><Layers3 />Задача</div></label><label className="dialog-field">Приоритет<div className="fake-select"><span className="priority-dot priority-medium" />Средний</div></label></div><DialogFooter><DialogClose render={<Button variant="ghost" />}>Отмена</DialogClose><Button onClick={createIssue} disabled={!newTitle.trim()}>Создать задачу</Button></DialogFooter></DialogContent>
             </Dialog>
           </div>
         </header>
 
         <div className="board-header">
           <div className="eyebrow"><span>Проекты</span><span>/</span><strong>Orbit App</strong></div>
-          <div className="title-row"><div><h1>Разработка продукта</h1><p>Спринт 24 · 2–15 сентября</p></div><div className="header-actions"><Button variant="outline"><Filter />Фильтр</Button><Button variant="outline"><MoreHorizontal /></Button></div></div>
-          <div className="sprint-strip"><div className="metric"><span className="metric-icon blue"><Clock3 /></span><span><strong>9 дней</strong><small>до завершения</small></span></div><div className="metric"><span className="metric-icon pink"><Layers3 /></span><span><strong>{issues.reduce((sum, issue) => sum + issue.points, 0)} points</strong><small>в текущем спринте</small></span></div><div className="metric progress-metric"><div className="metric-label"><span><strong>68%</strong><small>прогресс спринта</small></span><span>34 / 50</span></div><div className="progress-track"><span /></div></div><div className="view-toggle"><button className="active"><LayoutDashboard />Доска</button><button><Layers3 />Список</button></div></div>
+          <div className="title-row"><div><h1>Разработка продукта</h1><p>Спринт 24 · 2–15 сентября</p></div><div className="header-actions"><Dialog open={filterOpen} onOpenChange={setFilterOpen}><DialogTrigger render={<Button variant="outline" className={activeFilterCount ? 'filter-active' : ''} />}><Filter />Фильтр{activeFilterCount > 0 && <span className="filter-count">{activeFilterCount}</span>}</DialogTrigger><DialogContent className="filter-dialog sm:max-w-md"><DialogHeader><DialogTitle>Фильтры задач</DialogTitle><DialogDescription>Показываем только задачи, которые подходят под все условия.</DialogDescription></DialogHeader><div className="filter-fields"><label className="dialog-field">Статус<Select value={statusFilter} onValueChange={(value) => setStatusFilter((value ?? 'all') as Status | 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все статусы</SelectItem>{columns.map((column) => <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>)}</SelectContent></Select></label><label className="dialog-field">Приоритет<Select value={priorityFilter} onValueChange={(value) => setPriorityFilter((value ?? 'all') as Priority | 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все приоритеты</SelectItem>{(['Высокий','Средний','Низкий'] as Priority[]).map((priority) => <SelectItem key={priority} value={priority}>{priority}</SelectItem>)}</SelectContent></Select></label><label className="dialog-field">Исполнитель<Select value={assigneeFilter} onValueChange={(value) => setAssigneeFilter(value ?? 'all')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Все исполнители</SelectItem>{Object.keys(avatarColors).map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select></label></div><DialogFooter><Button variant="ghost" onClick={() => { setStatusFilter('all'); setPriorityFilter('all'); setAssigneeFilter('all'); }}>Сбросить</Button><DialogClose render={<Button />}>Показать {visibleIssues.length}</DialogClose></DialogFooter></DialogContent></Dialog></div></div>
+          <div className="sprint-strip"><div className="metric"><span className="metric-icon blue"><Clock3 /></span><span><strong>9 дней</strong><small>до завершения</small></span></div><div className="metric"><span className="metric-icon pink"><Layers3 /></span><span><strong>{issues.reduce((sum, issue) => sum + issue.points, 0)} points</strong><small>в текущем спринте</small></span></div><div className="metric progress-metric"><div className="metric-label"><span><strong>68%</strong><small>прогресс спринта</small></span><span>34 / 50</span></div><div className="progress-track"><span /></div></div><div className="view-toggle"><button className={viewMode === 'board' ? 'active' : ''} onClick={() => setViewMode('board')}><LayoutDashboard />Доска</button><button className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><Layers3 />Список</button></div></div>
         </div>
 
-        <section className="kanban" id="board" aria-label="Канбан-доска">
+        {viewMode === 'board' ? <section className="kanban" id="board" aria-label="Канбан-доска">
           {columns.map((column) => { const columnIssues = visibleIssues.filter((issue) => issue.status === column.id); const ColumnIcon = column.id === 'done' ? CheckCircle2 : column.id === 'review' ? Eye : column.id === 'progress' ? Clock3 : Circle; return (
             <div className={`kanban-column column-${column.id}`} key={column.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, column.id)}>
               <div className="column-heading"><div><ColumnIcon /><strong>{column.title}</strong><span>{columnIssues.length}</span></div><button aria-label={`Добавить в ${column.title}`} onClick={() => setDialogOpen(true)}><Plus /></button></div><p className="column-hint">{column.hint}</p><div className="card-stack">{columnIssues.map((issue) => <IssueCard key={issue.id} issue={issue} onOpen={setSelectedIssue} onDragStart={(event, id) => event.dataTransfer.setData('text/plain', id)} />)}{columnIssues.length === 0 && <div className="empty-column">Перетащите задачу сюда</div>}</div><button className="add-issue" onClick={() => setDialogOpen(true)}><Plus />Добавить задачу</button>
             </div> ); })}
-        </section>
+        </section> : <section className="issue-list" aria-label="Список задач"><div className="list-summary"><strong>{visibleIssues.length} задач</strong><span>{activeFilterCount ? `Активных фильтров: ${activeFilterCount}` : 'Все задачи текущего спринта'}</span></div><Table><TableHeader><TableRow><TableHead>Ключ</TableHead><TableHead>Задача</TableHead><TableHead>Статус</TableHead><TableHead>Приоритет</TableHead><TableHead>Исполнитель</TableHead><TableHead className="points-cell">SP</TableHead></TableRow></TableHeader><TableBody>{visibleIssues.map((issue) => { const column = columns.find((item) => item.id === issue.status); const priorityClass = issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low'; return <TableRow key={issue.id} className="issue-list-row" tabIndex={0} onClick={() => setSelectedIssue(issue)} onKeyDown={(event) => { if (event.key === 'Enter') setSelectedIssue(issue); }}><TableCell className="list-key"><span className="issue-kind"><CheckCircle2 /></span>{issue.id}</TableCell><TableCell className="list-title">{issue.title}</TableCell><TableCell><span className={`status-pill status-${issue.status}`}>{column?.title}</span></TableCell><TableCell><span className={`priority-badge ${priorityClass}`}>{issue.priority}</span></TableCell><TableCell><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar></TableCell><TableCell className="points-cell">{issue.points}</TableCell></TableRow>; })}</TableBody></Table>{visibleIssues.length === 0 && <div className="empty-list">Ничего не найдено. Измените поиск или сбросьте фильтры.</div>}</section>}
       </section>
       {selectedIssue && <IssueDetails issue={selectedIssue} onSave={saveIssue} onDelete={deleteIssue} onClose={() => setSelectedIssue(null)} />}
       {mobileNav && <button className="sidebar-backdrop" onClick={() => setMobileNav(false)} aria-label="Закрыть меню" />}
