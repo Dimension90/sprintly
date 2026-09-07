@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, type DragEvent } from 'react';
 import {
   BarChart3, Bell, CheckCircle2, ChevronDown, Circle, Clock3, Eye, Filter,
   Inbox, Layers3, LayoutDashboard, Menu, MessageSquare, MoreHorizontal,
-  Paperclip, Plus, Rocket, Search, Settings, Users,
+  Paperclip, Plus, Rocket, Search, Settings, Trash2, Users,
 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
@@ -13,6 +13,9 @@ import {
   DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog';
 
 type Status = 'backlog' | 'progress' | 'review' | 'done';
 type Priority = 'Высокий' | 'Средний' | 'Низкий';
@@ -45,15 +48,42 @@ const avatarColors: Record<string, string> = { АК: 'bg-[#d7ff64] text-[#203100
 
 function BrandMark() { return <div className="brand-mark" aria-hidden="true"><span /><span /><span /></div>; }
 
-function IssueCard({ issue, onDragStart }: { issue: Issue; onDragStart: (event: DragEvent, id: string) => void }) {
+function IssueCard({ issue, onDragStart, onOpen }: { issue: Issue; onDragStart: (event: DragEvent, id: string) => void; onOpen: (issue: Issue) => void }) {
   const priorityClass = issue.priority === 'Высокий' ? 'priority-high' : issue.priority === 'Средний' ? 'priority-medium' : 'priority-low';
   return (
-    <article className="issue-card" draggable onDragStart={(event) => onDragStart(event, issue.id)} tabIndex={0}>
+    <article className="issue-card" draggable onDragStart={(event) => onDragStart(event, issue.id)} onClick={() => onOpen(issue)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(issue); }} tabIndex={0}>
       <div className="issue-card-top"><span className={`priority-dot ${priorityClass}`} title={`Приоритет: ${issue.priority}`} /><span className="issue-id">{issue.id}</span><button className="icon-button compact" aria-label={`Действия задачи ${issue.id}`}><MoreHorizontal /></button></div>
       <h3>{issue.title}</h3>
       {issue.label && <span className="issue-label">{issue.label}</span>}
       <div className="issue-card-bottom"><Avatar size="sm"><AvatarFallback className={avatarColors[issue.assignee]}>{issue.assignee}</AvatarFallback></Avatar><span className="story-points">{issue.points}</span><span className="meta"><MessageSquare />{issue.comments}</span>{issue.attachments > 0 && <span className="meta"><Paperclip />{issue.attachments}</span>}</div>
     </article>
+  );
+}
+
+function IssueDetails({ issue, onSave, onDelete, onClose }: { issue: Issue; onSave: (issue: Issue) => Promise<void>; onDelete: (id: string) => Promise<void>; onClose: () => void }) {
+  const [draft, setDraft] = useState(issue);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(issue), [issue]);
+  const save = async () => { setSaving(true); try { await onSave(draft); } finally { setSaving(false); } };
+  return (
+    <Sheet open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <SheetContent className="issue-sheet sm:max-w-[620px]">
+        <SheetHeader className="issue-sheet-header"><span className="issue-breadcrumb">Orbit App / {issue.id}</span><SheetTitle>Задача</SheetTitle><SheetDescription>Редактирование сохраняется в PostgreSQL.</SheetDescription></SheetHeader>
+        <div className="issue-editor">
+          <label className="editor-field full">Название<Input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} /></label>
+          <div className="editor-section-title">Сведения</div>
+          <label className="editor-field">Статус<Select value={draft.status} onValueChange={(value) => setDraft({ ...draft, status: value as Status })}><SelectTrigger className="editor-select"><SelectValue /></SelectTrigger><SelectContent>{columns.map((column) => <SelectItem key={column.id} value={column.id}>{column.title}</SelectItem>)}</SelectContent></Select></label>
+          <label className="editor-field">Приоритет<Select value={draft.priority} onValueChange={(value) => setDraft({ ...draft, priority: value as Priority })}><SelectTrigger className="editor-select"><SelectValue /></SelectTrigger><SelectContent>{(['Высокий','Средний','Низкий'] as Priority[]).map((priority) => <SelectItem key={priority} value={priority}>{priority}</SelectItem>)}</SelectContent></Select></label>
+          <label className="editor-field">Исполнитель<Select value={draft.assignee} onValueChange={(value) => setDraft({ ...draft, assignee: value as string })}><SelectTrigger className="editor-select"><SelectValue /></SelectTrigger><SelectContent>{Object.keys(avatarColors).map((person) => <SelectItem key={person} value={person}>{person}</SelectItem>)}</SelectContent></Select></label>
+          <label className="editor-field">Оценка<Input type="number" min="0" max="100" value={draft.points} onChange={(event) => setDraft({ ...draft, points: Number(event.target.value) })} /></label>
+          <label className="editor-field full">Метка<Input value={draft.label ?? ''} onChange={(event) => setDraft({ ...draft, label: event.target.value })} /></label>
+        </div>
+        <div className="issue-sheet-footer">
+          <AlertDialog><AlertDialogTrigger render={<Button variant="destructive" />}><Trash2 />Удалить</AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Удалить {issue.id}?</AlertDialogTitle><AlertDialogDescription>Задача будет удалена без возможности восстановления.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Отмена</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void onDelete(issue.id)}>Удалить</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+          <Button onClick={() => void save()} disabled={saving || !draft.title.trim()}>{saving ? 'Сохраняем…' : 'Сохранить'}</Button>
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -63,6 +93,7 @@ export default function Home() {
   const [newTitle, setNewTitle] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [mobileNav, setMobileNav] = useState(false);
+  const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     fetch('/api/issues', { signal: controller.signal })
@@ -73,8 +104,11 @@ export default function Home() {
   }, []);
   const visibleIssues = useMemo(() => { const value = query.trim().toLowerCase(); return value ? issues.filter((issue) => `${issue.id} ${issue.title} ${issue.label}`.toLowerCase().includes(value)) : issues }, [issues, query]);
   const moveIssue = (id: string, status: Status) => {
-    setIssues((current) => current.map((issue) => issue.id === id ? { ...issue, status } : issue));
-    void fetch(`/api/issues/${encodeURIComponent(id)}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }).catch(() => undefined);
+    const issue = issues.find((item) => item.id === id);
+    if (!issue) return;
+    const updated = { ...issue, status };
+    setIssues((current) => current.map((item) => item.id === id ? updated : item));
+    void fetch(`/api/issues/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(updated) }).catch(() => undefined);
   };
   const onDrop = (event: DragEvent, status: Status) => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain'); if (id) moveIssue(id, status); };
   const createIssue = async () => {
@@ -86,6 +120,19 @@ export default function Home() {
     } catch { /* Интерфейс остаётся рабочим, даже если локальный API остановлен. */ }
     setIssues((current) => [created, ...current]);
     setNewTitle(''); setDialogOpen(false);
+  };
+  const saveIssue = async (draft: Issue) => {
+    const response = await fetch(`/api/issues/${encodeURIComponent(draft.id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(draft) });
+    if (!response.ok) throw new Error('Не удалось сохранить задачу');
+    const saved = await response.json() as Issue;
+    setIssues((current) => current.map((issue) => issue.id === saved.id ? saved : issue));
+    setSelectedIssue(saved);
+  };
+  const deleteIssue = async (id: string) => {
+    const response = await fetch(`/api/issues/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    if (!response.ok) throw new Error('Не удалось удалить задачу');
+    setIssues((current) => current.filter((issue) => issue.id !== id));
+    setSelectedIssue(null);
   };
 
   useEffect(() => {
@@ -116,7 +163,8 @@ export default function Home() {
         const id = String(value?.id ?? ''); const status = String(value?.status ?? '') as Status;
         if (!issues.some((issue) => issue.id === id)) throw new Error('Задача не найдена');
         if (!columns.some((column) => column.id === status)) throw new Error('Неизвестный статус');
-        const response = await fetch(`/api/issues/${encodeURIComponent(id)}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) });
+        const current = issues.find((issue) => issue.id === id)!;
+        const response = await fetch(`/api/issues/${encodeURIComponent(id)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...current, status }) });
         if (!response.ok) throw new Error('Не удалось изменить статус');
         setIssues((current) => current.map((issue) => issue.id === id ? { ...issue, status } : issue));
         return { id, status };
@@ -161,10 +209,11 @@ export default function Home() {
         <section className="kanban" id="board" aria-label="Канбан-доска">
           {columns.map((column) => { const columnIssues = visibleIssues.filter((issue) => issue.status === column.id); const ColumnIcon = column.id === 'done' ? CheckCircle2 : column.id === 'review' ? Eye : column.id === 'progress' ? Clock3 : Circle; return (
             <div className={`kanban-column column-${column.id}`} key={column.id} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, column.id)}>
-              <div className="column-heading"><div><ColumnIcon /><strong>{column.title}</strong><span>{columnIssues.length}</span></div><button aria-label={`Добавить в ${column.title}`} onClick={() => setDialogOpen(true)}><Plus /></button></div><p className="column-hint">{column.hint}</p><div className="card-stack">{columnIssues.map((issue) => <IssueCard key={issue.id} issue={issue} onDragStart={(event, id) => event.dataTransfer.setData('text/plain', id)} />)}{columnIssues.length === 0 && <div className="empty-column">Перетащите задачу сюда</div>}</div><button className="add-issue" onClick={() => setDialogOpen(true)}><Plus />Добавить задачу</button>
+              <div className="column-heading"><div><ColumnIcon /><strong>{column.title}</strong><span>{columnIssues.length}</span></div><button aria-label={`Добавить в ${column.title}`} onClick={() => setDialogOpen(true)}><Plus /></button></div><p className="column-hint">{column.hint}</p><div className="card-stack">{columnIssues.map((issue) => <IssueCard key={issue.id} issue={issue} onOpen={setSelectedIssue} onDragStart={(event, id) => event.dataTransfer.setData('text/plain', id)} />)}{columnIssues.length === 0 && <div className="empty-column">Перетащите задачу сюда</div>}</div><button className="add-issue" onClick={() => setDialogOpen(true)}><Plus />Добавить задачу</button>
             </div> ); })}
         </section>
       </section>
+      {selectedIssue && <IssueDetails issue={selectedIssue} onSave={saveIssue} onDelete={deleteIssue} onClose={() => setSelectedIssue(null)} />}
       {mobileNav && <button className="sidebar-backdrop" onClick={() => setMobileNav(false)} aria-label="Закрыть меню" />}
     </main>
   );

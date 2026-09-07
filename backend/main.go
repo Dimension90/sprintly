@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -30,7 +31,8 @@ type Issue struct {
 type IssueStore interface {
 	List(context.Context) ([]Issue, error)
 	Create(context.Context, Issue) (Issue, error)
-	UpdateStatus(context.Context, string, string) (Issue, error)
+	Update(context.Context, string, Issue) (Issue, error)
+	Delete(context.Context, string) error
 }
 
 type PostgresStore struct{ pool *pgxpool.Pool }
@@ -140,16 +142,31 @@ func (s *PostgresStore) Create(ctx context.Context, issue Issue) (Issue, error) 
 	return issue, err
 }
 
-func (s *PostgresStore) UpdateStatus(ctx context.Context, id, status string) (Issue, error) {
-	if !validStatus(status) {
+func (s *PostgresStore) Update(ctx context.Context, id string, input Issue) (Issue, error) {
+	input.Title = strings.TrimSpace(input.Title)
+	if input.Title == "" {
+		return Issue{}, errors.New("title is required")
+	}
+	if !validStatus(input.Status) {
 		return Issue{}, errors.New("invalid status")
 	}
 	var issue Issue
-	err := s.pool.QueryRow(ctx, `UPDATE issues SET status=$2 WHERE id=$1 RETURNING id,title,status,priority,assignee,points,comments,attachments,label,created_at`, id, status).Scan(&issue.ID, &issue.Title, &issue.Status, &issue.Priority, &issue.Assignee, &issue.Points, &issue.Comments, &issue.Attachments, &issue.Label, &issue.CreatedAt)
-	if err != nil && strings.Contains(err.Error(), "no rows") {
+	err := s.pool.QueryRow(ctx, `UPDATE issues SET title=$2,status=$3,priority=$4,assignee=$5,points=$6,label=$7 WHERE id=$1 RETURNING id,title,status,priority,assignee,points,comments,attachments,label,created_at`, id, input.Title, input.Status, input.Priority, input.Assignee, input.Points, input.Label).Scan(&issue.ID, &issue.Title, &issue.Status, &issue.Priority, &issue.Assignee, &issue.Points, &issue.Comments, &issue.Attachments, &issue.Label, &issue.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return Issue{}, errors.New("issue not found")
 	}
 	return issue, err
+}
+
+func (s *PostgresStore) Delete(ctx context.Context, id string) error {
+	result, err := s.pool.Exec(ctx, `DELETE FROM issues WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return errors.New("issue not found")
+	}
+	return nil
 }
 
 func validStatus(status string) bool {
@@ -170,7 +187,8 @@ func (api API) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /api/issues", api.listIssues)
 	mux.HandleFunc("POST /api/issues", api.createIssue)
-	mux.HandleFunc("PATCH /api/issues/{id}/status", api.updateStatus)
+	mux.HandleFunc("PUT /api/issues/{id}", api.updateIssue)
+	mux.HandleFunc("DELETE /api/issues/{id}", api.deleteIssue)
 	return withLogging(mux)
 }
 
@@ -197,15 +215,13 @@ func (api API) createIssue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, issue)
 }
 
-func (api API) updateStatus(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Status string `json:"status"`
-	}
+func (api API) updateIssue(w http.ResponseWriter, r *http.Request) {
+	var input Issue
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	issue, err := api.store.UpdateStatus(r.Context(), r.PathValue("id"), input.Status)
+	issue, err := api.store.Update(r.Context(), r.PathValue("id"), input)
 	if err != nil {
 		status := http.StatusUnprocessableEntity
 		if err.Error() == "issue not found" {
@@ -215,6 +231,19 @@ func (api API) updateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, issue)
+}
+
+func (api API) deleteIssue(w http.ResponseWriter, r *http.Request) {
+	err := api.store.Delete(r.Context(), r.PathValue("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "issue not found" {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func withLogging(next http.Handler) http.Handler {

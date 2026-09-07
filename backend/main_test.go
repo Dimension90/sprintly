@@ -25,17 +25,27 @@ func (s *memoryStore) Create(_ context.Context, issue Issue) (Issue, error) {
 	s.issues = append([]Issue{issue}, s.issues...)
 	return issue, nil
 }
-func (s *memoryStore) UpdateStatus(_ context.Context, id, status string) (Issue, error) {
-	if !validStatus(status) {
+func (s *memoryStore) Update(_ context.Context, id string, input Issue) (Issue, error) {
+	if !validStatus(input.Status) {
 		return Issue{}, errors.New("invalid status")
 	}
 	for i := range s.issues {
 		if s.issues[i].ID == id {
-			s.issues[i].Status = status
+			input.ID, input.CreatedAt = id, s.issues[i].CreatedAt
+			s.issues[i] = input
 			return s.issues[i], nil
 		}
 	}
 	return Issue{}, errors.New("issue not found")
+}
+func (s *memoryStore) Delete(_ context.Context, id string) error {
+	for i := range s.issues {
+		if s.issues[i].ID == id {
+			s.issues = append(s.issues[:i], s.issues[i+1:]...)
+			return nil
+		}
+	}
+	return errors.New("issue not found")
 }
 
 func testAPI() http.Handler { return API{store: &memoryStore{issues: seedIssues()}}.routes() }
@@ -52,7 +62,9 @@ func TestCreateAndMoveIssue(t *testing.T) {
 	if err := json.NewDecoder(created.Body).Decode(&issue); err != nil {
 		t.Fatal(err)
 	}
-	move := httptest.NewRequest(http.MethodPatch, "/api/issues/"+issue.ID+"/status", bytes.NewBufferString(`{"status":"done"}`))
+	issue.Title, issue.Status, issue.Priority, issue.Assignee = "Проверить API", "done", "Средний", "АК"
+	payload, _ := json.Marshal(issue)
+	move := httptest.NewRequest(http.MethodPut, "/api/issues/"+issue.ID, bytes.NewReader(payload))
 	moved := httptest.NewRecorder()
 	handler.ServeHTTP(moved, move)
 	if moved.Code != http.StatusOK {
@@ -70,8 +82,16 @@ func TestRejectsEmptyTitle(t *testing.T) {
 
 func TestRejectsInvalidStatus(t *testing.T) {
 	res := httptest.NewRecorder()
-	testAPI().ServeHTTP(res, httptest.NewRequest(http.MethodPatch, "/api/issues/ORB-142/status", bytes.NewBufferString(`{"status":"unknown"}`)))
+	testAPI().ServeHTTP(res, httptest.NewRequest(http.MethodPut, "/api/issues/ORB-142", bytes.NewBufferString(`{"title":"Test","status":"unknown"}`)))
 	if res.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d", res.Code)
+	}
+}
+
+func TestDeleteIssue(t *testing.T) {
+	res := httptest.NewRecorder()
+	testAPI().ServeHTTP(res, httptest.NewRequest(http.MethodDelete, "/api/issues/ORB-142", nil))
+	if res.Code != http.StatusNoContent {
 		t.Fatalf("status = %d", res.Code)
 	}
 }
